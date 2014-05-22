@@ -11,16 +11,19 @@ var fs = require('fs');
 
 /**********
  * config */
-var MAX_NUM_REPL = 10000;
+var MAX_NUM_REPL = 850;
 var SPLIT_CHAR = ' ';
+var IN_FILE = 'test.txt';
+var OUT_FILE = 'out.txt';
+
+/*********************
+ * working variables */
+var startTime = +new Date();
 
 /******************
  * work functions */
-fs.readFile('test', 'ascii', function(err, data) {
+fs.readFile(IN_FILE, 'ascii', function(err, data) {
     if (err) return console.log(err);
-
-    //for statistics
-    startSize = data.length;
 
     //get a good list of replacement strings
     var gen = StringIteratorMonad();
@@ -43,8 +46,8 @@ fs.readFile('test', 'ascii', function(err, data) {
     //load those counts into an array and sort them
     var counts = [];
     for (var token in countsObj) counts.push([token, countsObj[token]]);
-    counts.sort(function(a, b) {
-        return b[1] - a[1];
+    counts.sort(function(a, b) { //take the length of the word into account
+        return b[0].length*(b[1]-1) - a[0].length*(a[1]-1);
     });
 
     //map the most repeated words to the replacement strings
@@ -71,14 +74,29 @@ fs.readFile('test', 'ascii', function(err, data) {
     var ret = JSON.stringify(decodeMap)+'\n'+tokens.join(SPLIT_CHAR);
     
     //write it to a file
-    fs.writeFile('out', ret, function (err) {
+    fs.writeFile(OUT_FILE, ret, function (err) {
         if (err) return console.log(err);
-        console.log('Loaded compress file into out.');
+        
+        var duration = (+new Date() - startTime)+'ms';
         console.log(
-            'Compression ratio: '+(''+100*ret.length/startSize).substring(0,5)+'%'
+            'Compressed '+IN_FILE+' into '+OUT_FILE+' in '+duration
+        );
+        console.log(
+            'Compression ratio: '+toPercent(ret.length/data.length, 2)
         );
     });
 });
+
+/********************
+ * helper functions */
+function toPercent(percentage, places) {
+    return round(100*percentage, places)+'%';
+}
+
+function round(n, p) {
+    var f = Math.pow(10, p);
+    return Math.round(f*n)/f;
+}
 
 /***********
  * objects */
