@@ -11,7 +11,7 @@ var fs = require('fs');
 
 /**********
  * config */
-var MAX_NUM_REPL = 850;
+var MAX_NUM_REPL = 3000;
 var SPLIT_CHAR = ' ';
 var IN_FILE = 'test.txt';
 var OUT_FILE = 'out.txt';
@@ -34,11 +34,25 @@ fs.readFile(IN_FILE, 'ascii', function(err, data) {
         gen = mb(mIncrString, gen);
     }
     
-    //count all the individual words
+    //count the unigrams
     var tokens = data.split(SPLIT_CHAR);
     var countsObj = {};
     for (var ai = 0; ai < tokens.length; ai++) {
         var t = tokens[ai];
+        if (countsObj.hasOwnProperty(t)) countsObj[t] += 1;
+        else countsObj[t] = 1;
+    }
+
+    //count the bigrams
+    for (var ai = 0; ai < tokens.length-1; ai++) {
+        var t = tokens[ai]+SPLIT_CHAR+tokens[ai+1];
+        if (countsObj.hasOwnProperty(t)) countsObj[t] += 1;
+        else countsObj[t] = 1;
+    }
+
+    //count the trigrams
+    for (var ai = 0; ai < tokens.length-2; ai++) {
+        var t = tokens[ai]+SPLIT_CHAR+tokens[ai+1]+SPLIT_CHAR+tokens[ai+2];
         if (countsObj.hasOwnProperty(t)) countsObj[t] += 1;
         else countsObj[t] = 1;
     }
@@ -54,7 +68,7 @@ fs.readFile(IN_FILE, 'ascii', function(err, data) {
     var encodeMap = {};
     var decodeMap = {};
     var idx = 0;
-    for (var ai = 0; ai < counts.length, ai < MAX_NUM_REPL; ai++) {
+    for (var ai = 0; ai < counts.length && ai < MAX_NUM_REPL; ai++) {
         var t = counts[ai][0], repl = replacements[idx];
         if (repl.length < t.length && counts[ai][1] > 1) {
             encodeMap[t] = repl, decodeMap[repl] = t;
@@ -62,16 +76,50 @@ fs.readFile(IN_FILE, 'ascii', function(err, data) {
         }
     }
 
-    //go through the tokens and replace each token with its mapping
+    //only include necessary mappings
+    var smallDecodeMap = {};
+
+    //replace the trigrams
+    var trigramTmp = [];
+    for (var ai = 0; ai < tokens.length-2; ai++) {
+        var t = tokens[ai]+SPLIT_CHAR+tokens[ai+1]+SPLIT_CHAR+tokens[ai+2];
+        if (encodeMap.hasOwnProperty(t) && encodeMap[t].length < t.length) {
+            trigramTmp.push(encodeMap[t]);
+            if (!smallDecodeMap.hasOwnProperty(encodeMap[t])) {
+                smallDecodeMap[encodeMap[t]] = t;
+            }
+            ai += 2;
+        } else trigramTmp.push(tokens[ai]);
+    }
+    tokens = trigramTmp;
+
+    //replace the bigrams
+    var bigramTmp = [];
+    for (var ai = 0; ai < tokens.length-1; ai++) {
+        var t = tokens[ai]+SPLIT_CHAR+tokens[ai+1];
+        if (encodeMap.hasOwnProperty(t) && encodeMap[t].length < t.length) {
+            bigramTmp.push(encodeMap[t]);
+            if (!smallDecodeMap.hasOwnProperty(encodeMap[t])) {
+                smallDecodeMap[encodeMap[t]] = t;
+            }
+            ai += 1;
+        } else bigramTmp.push(tokens[ai]);
+    }
+    tokens = bigramTmp;
+
+    //replace the unigrams
     for (var ai = 0; ai < tokens.length; ai++) {
         var t = tokens[ai];
         if (encodeMap.hasOwnProperty(t) && encodeMap[t].length < t.length) {
             tokens[ai] = encodeMap[t];
+            if (!smallDecodeMap.hasOwnProperty(encodeMap[t])) {
+                smallDecodeMap[encodeMap[t]] = t;
+            }
         }
     }
     
     //assemble the output
-    var ret = JSON.stringify(decodeMap)+'\n'+tokens.join(SPLIT_CHAR);
+    var ret = JSON.stringify(smallDecodeMap)+'\n'+tokens.join(SPLIT_CHAR);
     
     //write it to a file
     fs.writeFile(OUT_FILE, ret, function (err) {
@@ -84,6 +132,7 @@ fs.readFile(IN_FILE, 'ascii', function(err, data) {
         console.log(
             'Compression ratio: '+toPercent(ret.length/data.length, 2)
         );
+        console.log('\twith '+MAX_NUM_REPL+' replacement mappings at most');
     });
 });
 
@@ -117,12 +166,19 @@ function mIncrString(mv) {
 
 function incrString(str) {
     var low = 33, high = 126; //both inclusive
-
     var l = str.length;
+    
+    if (l === 0) return String.fromCharCode(low);
+
     var lastCharsCharCode = str.charCodeAt(l-1);
     if (lastCharsCharCode < high) { //then you can just increment it
         return str.substring(0, l-1)+String.fromCharCode(lastCharsCharCode+1);
-    } else { //this means it equals the maximum value -> add a new char
+    } else if (l === 1) { 
         return new Array(l+2).join(String.fromCharCode(low));
+    } else {
+        return incrString(str.substring(0,l-1))+String.fromCharCode(low);
     }
 }
+
+
+
