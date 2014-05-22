@@ -11,21 +11,24 @@ var fs = require('fs');
 
 /**********
  * config */
-var MAX_NUM_REPL = 47;
-var REPL_LEN = 2;
+var MAX_NUM_REPL = 10000;
 var SPLIT_CHAR = ' ';
 
+/******************
+ * work functions */
 fs.readFile('test', 'ascii', function(err, data) {
     if (err) return console.log(err);
 
+    //for statistics
+    startSize = data.length;
+
     //get a good list of replacement strings
+    var gen = StringIteratorMonad();
     var replacements = [];
     for (var ai = 0; ai < MAX_NUM_REPL; ai++) {
-        var cand = 'a';
-        while (data.indexOf(cand) > -1 || replacements.indexOf(cand) > -1) {
-            cand = getRandStr(REPL_LEN);
-        }
-        replacements.push(cand);
+        while (data.indexOf(gen()) > -1) gen = mb(mIncrString, gen);
+        replacements.push(gen());
+        gen = mb(mIncrString, gen);
     }
     
     //count all the individual words
@@ -70,17 +73,38 @@ fs.readFile('test', 'ascii', function(err, data) {
     //write it to a file
     fs.writeFile('out', ret, function (err) {
         if (err) return console.log(err);
-        console.log('{compressed file} > out');
+        console.log('Loaded compress file into out.');
+        console.log(
+            'Compression ratio: '+(''+100*ret.length/startSize).substring(0,5)+'%'
+        );
     });
 });
 
-function getRandStr(len, alpha) {
-    alpha = alpha || 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-	var ret = '';
-	while (ret.length < len) ret += alpha.charAt(getRandInt(0, alpha.length));
-	return ret;
+/***********
+ * objects */
+function StringIteratorMonad(s) {
+    var ret = arguments.length > 0 ? s : incrString('');
+    return function() {
+        return ret;
+    };
 }
 
-function getRandInt(low, high) { //output is in [low, high)
-    return Math.floor(low + Math.random()*(high-low));
+function mb(f, mv) { //monad bind
+    return StringIteratorMonad(f(mv));
+}
+
+function mIncrString(mv) {
+    return incrString(mv());
+}
+
+function incrString(str) {
+    var low = 33, high = 126; //both inclusive
+
+    var l = str.length;
+    var lastCharsCharCode = str.charCodeAt(l-1);
+    if (lastCharsCharCode < high) { //then you can just increment it
+        return str.substring(0, l-1)+String.fromCharCode(lastCharsCharCode+1);
+    } else { //this means it equals the maximum value -> add a new char
+        return new Array(l+2).join(String.fromCharCode(low));
+    }
 }
