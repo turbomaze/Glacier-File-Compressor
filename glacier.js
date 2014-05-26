@@ -12,8 +12,7 @@ var fs = require('fs');
 /**********
  * config */
 var IN_FILE = 'in.dat'; //input file for compression
-var OUT_FILE = 'file.ice'; //output file for compression
-var ENC_FILE = 'file.ice'; //input file for decompression
+var ENC_FILE = 'file.ice'; //compressed file
 var DEC_FILE = 'out.dat'; //output file decompression
 
 /*************
@@ -42,7 +41,7 @@ function compress() {
                     countsObj[buffer[ai]] += 1;
                 } else countsObj[buffer[ai]] = 1;
             }
-            
+
             //turn each byte into a leaf HuffNode
             var stack = [];
             for (var k in countsObj) {
@@ -64,8 +63,9 @@ function compress() {
             root.setRight(stack[1]);
 
             //map each byte to its traversal path
-            var listOfEncodings = {};
-            root.traverse(listOfEncodings, '');
+            var encoder = {};
+            root.traverse(encoder, '');
+console.log(encoder);
 
             //assemble the file preamble
             var preamble = '';
@@ -74,27 +74,17 @@ function compress() {
             preamble += byteToBinString(bitsInFileLen).substring(2, 8);
             //n bits: how many bytes are in the uncompressed file
             preamble += fileLen.toString(2);
-            //4 bits: the # bits needed to describe the # encodings
-            var numEncs = Object.keys(listOfEncodings).length;
-            var bitsInNumEncs = bitsIn(numEncs);
-            preamble += byteToBinString(bitsInNumEncs).substring(4, 8);
-            //n bits: the # of encodings
-            preamble += numEncs.toString(2);
-            //all the encodings
-            for (var k in listOfEncodings) {
-                //5 bits: # bits in the encoded version
-                var bitsInEnc = listOfEncodings[k].length;
-                preamble += byteToBinString(bitsInEnc).substring(3, 8);
-                //n bits: the encoded version
-                preamble += listOfEncodings[k];
-                //8 bits: the normal, decoded byte
-                preamble += byteToBinString(parseInt(k));
-            }
+            //16 bits: number of bits in the serialized Huffman tree
+            var huffTree = root.serialize();
+            var bitsInHuffTree = huffTree.length;
+            preamble += numToBinString(bitsInHuffTree, 2);
+            //n bits: the Huffman tree
+            preamble += huffTree;
 
             //form a bin string by applying the encodings to the input file
             var encodedFile = '';
             for (var ai = 0; ai < fileLen; ai++) {
-                encodedFile += listOfEncodings[buffer[ai]];
+                encodedFile += encoder[buffer[ai]];
             }
 
             //turn those strings of 1s and 0s into a byte array
@@ -107,11 +97,53 @@ function compress() {
             var outputBuffer = new Buffer(outputBytes);
 
             //write the file to disk
-            fs.writeFile(OUT_FILE, outputBuffer, 'binary', function(err) {
+            fs.writeFile(ENC_FILE, outputBuffer, 'binary', function(err) {
                 if (err) return console.log(err);
 
                 var pct = Math.round(10000*outputBytes.length/fileLen)/100;
-                console.log(OUT_FILE+' is '+pct+'% the size of '+IN_FILE);
+                console.log(ENC_FILE+' is '+pct+'% the size of '+IN_FILE);
+            });
+        });
+    });
+}
+
+function decompress() {
+    fs.open(ENC_FILE, 'r', function(err, fd) {
+        if (err) return console.log(err);
+
+        var fileLen = fs.statSync(ENC_FILE)['size'];
+        var buffer = new Buffer(fileLen);
+        fs.read(fd, buffer, 0, fileLen, 0, function(err, num) {
+            if (err) return console.log(err);
+            
+            var ptr = 0;
+            //collect the information in the preamble
+            var bitsInOrigFileLen = parseInt(getBits(buffer, ptr, ptr+=6), 2);
+            var numBytesToDecode = parseInt(
+                getBits(buffer, ptr, ptr+=bitsInOrigFileLen), 2
+            );
+            var bitsInHuffTree = parseInt(getBits(buffer, ptr, ptr+=16), 2);
+            var serializedTree = getBits(buffer, ptr, ptr+=bitsInHuffTree);
+            var decoder = parseHuffTree(serializedTree);
+
+            //decode the file
+            var outputBytes = [];
+            var allPaths = getBits(buffer, ptr, 8*fileLen);
+            for (var ai = 0; ai < numBytesToDecode; ai++) {
+                var result = decoder.traversePath(allPaths);
+                outputBytes.push(result[0]);
+                allPaths = result[1];
+            }
+
+            //construct the output buffer
+            var outputBuffer = new Buffer(outputBytes);
+
+            //write the file to disk
+            fs.writeFile(DEC_FILE, outputBuffer, 'binary', function(err) {
+                if (err) return console.log(err);
+
+                var pct = Math.round(10000*outputBytes.length/fileLen)/100;
+                console.log(DEC_FILE+' is '+pct+'% the size of '+ENC_FILE);
             });
         });
     });
@@ -119,6 +151,31 @@ function compress() {
 
 /********************
  * helper functions */
+function parseHuffTree(tree) {
+    var root = new HuffNode();
+    tree = tree.substring(1);
+    var queue = [root];
+    while (tree.length > 0) {
+        var type = tree.charAt(0);
+        var node = null;
+        if (type === '0') { //normal node
+            node = new HuffNode();
+            tree = tree.substring(1);
+            queue.push(node);
+        } else { //leaf node
+            var value = parseInt(tree.substring(1, 9), 2);
+            node = new HuffNode(0, value); //freq doesn't matter
+            tree = tree.substring(9);
+        }
+        if (queue[0].left === undefined) queue[0].left = node;
+        else if (queue[0].right === undefined) {
+            queue[0].right = node;
+            queue.shift();
+        }
+    }
+    return root;
+}
+
 function getBits(byteArr, s, e) { //returns bits with indices [s, e]
     var idx1 = Math.floor(s/8);
     var idx2 = Math.floor(e/8);
@@ -126,7 +183,7 @@ function getBits(byteArr, s, e) { //returns bits with indices [s, e]
     for (var ai = idx1; ai <= idx2; ai++) {
         ret += byteToBinString(byteArr[ai]);
     }
-    return ret.substring(s%8, e);
+    return ret.substring(s%8, (s%8)+(e-s));
 }
 
 function byteToBinString(b) {
@@ -174,6 +231,26 @@ HuffNode.prototype.setRight = function(node) {
     this.right = node;
     this.freq += node.freq;
 };
+HuffNode.prototype.serialize = function() {
+    if (this.value !== undefined) { //leaf node?
+        return '1'+byteToBinString(this.value); //then it's easy peasy
+    } else { //normal node with a left part and a right part
+        var ret = '0';
+        var stack = [this.left, this.right];
+        while (stack.length > 0) {
+            if (stack[0].value === undefined) {
+                ret += '0';
+                stack.push(stack[0].left);
+                stack.push(stack[0].right);
+                stack.shift();
+            } else {
+                ret += stack[0].serialize();
+                stack.shift();
+            }
+        }
+        return ret;
+    }
+};
 HuffNode.prototype.traverse = function (bucket, prev) {
     if (this.value !== undefined) {
         bucket[this.value] = prev;
@@ -182,12 +259,12 @@ HuffNode.prototype.traverse = function (bucket, prev) {
         this.right.traverse(bucket, prev+'1');
     }
 };
-HuffNode.prototype.traversePath = function(path) {
+HuffNode.prototype.traversePath = function(path, fuck) {
     if (this.value !== undefined) { //leaf
-        return [this.value, path.substring(1)];
+        return [this.value, path];
     } else { //go left or right and recurse
-        var steps = path.split('').map(function(a){return parseInt(a)});
-        if (steps[0] === 0) {
+        var step = parseInt(path.charAt(0));
+        if (step === 0) {
             return this.left.traversePath(path.substring(1));
         } else {
             return this.right.traversePath(path.substring(1));
@@ -195,4 +272,4 @@ HuffNode.prototype.traversePath = function(path) {
     }
 };
 
-compress();
+decompress();
