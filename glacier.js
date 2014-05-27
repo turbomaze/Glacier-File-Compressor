@@ -301,6 +301,8 @@ fs.readdir(inputDir, function(err, files) {
     if (err) return console.log(err);
 
     files.forEach(function(fileName) {
+        if (fileName.indexOf('~') === 0) return; //skip these files
+
         //compress the file
         compress(
             inputDir+fileName,
