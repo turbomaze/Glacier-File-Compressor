@@ -11,6 +11,7 @@
 
 
 var fs = require('fs');
+var crypto = require('crypto');
 
 /**********
  * config */
@@ -26,7 +27,8 @@ var DEC_FILE = 'out.dat'; //output file decompression
 
 /******************
  * work functions */
-function compress() {
+function compress(callback) {
+    var start = +new Date();
     fs.open(IN_FILE, 'r', function(err, fd) {
         if (err) return console.log(err);
 
@@ -91,9 +93,9 @@ function compress() {
 
             //turn those strings of 1s and 0s into a byte array
             var entireFile = preamble + encodedFile;
-            //number of bits must be divisible by 8
-            var numZerosToAppend = (8 - entireFile.length%8)%8;
-            for (var ai = 0; ai < numZerosToAppend; ai++) entireFile += '0';
+            //the number of bits must be divisible by 8, so append some
+            var numToAppend = (8 - entireFile.length%8)%8;
+            for (var ai = 0; ai < numToAppend; ai++) entireFile += '0';
             var outputBytes = entireFile.match(/.{1,8}/g).map(function(a) {
                 return parseInt(a, 2);
             });
@@ -103,16 +105,20 @@ function compress() {
 
             //write the file to disk
             fs.writeFile(ENC_FILE, outputBuffer, 'binary', function(err) {
-                if (err) return console.log(err);
+                if (err) return callback(err);
 
-                var pct = Math.round(10000*outputBytes.length/fileLen)/100;
-                console.log(ENC_FILE+' is '+pct+'% the size of '+IN_FILE);
+                var time = +new Date() - start;
+                var hash = crypto.createHash('md5')
+                                 .update(buffer)
+                                 .digest('hex');
+                callback(false, time, hash, outputBytes.length, fileLen);
             });
         });
     });
 }
 
-function decompress() {
+function decompress(callback) {
+    var start = +new Date();
     fs.open(ENC_FILE, 'r', function(err, fd) {
         if (err) return console.log(err);
 
@@ -145,10 +151,13 @@ function decompress() {
 
             //write the file to disk
             fs.writeFile(DEC_FILE, outputBuffer, 'binary', function(err) {
-                if (err) return console.log(err);
+                if (err) return callback(err);
 
-                var pct = Math.round(10000*outputBytes.length/fileLen)/100;
-                console.log(DEC_FILE+' is '+pct+'% the size of '+ENC_FILE);
+                var time = +new Date() - start;
+                var hash = crypto.createHash('md5')
+                                 .update(outputBuffer)
+                                 .digest('hex');
+                callback(false, time, hash, outputBytes.length, fileLen);
             });
         });
     });
@@ -277,4 +286,33 @@ HuffNode.prototype.traversePath = function(path, fuck) {
     }
 };
 
-decompress();
+//compress the file
+compress(function(err, compTime, hashOfInput, newSize, oldSize) {
+    if (err) return console.log(err);
+
+    //report the results of the compression
+    var pct = Math.round(10000*newSize/oldSize)/100;
+    console.log(
+        'Compressed '+ENC_FILE+' '+
+        'to '+pct+'% the size of '+IN_FILE+' '+
+        'in '+compTime+'ms'
+    );
+
+    //decompress the file
+    start = +new Date();
+    decompress(function(err, decompTime, hashOfDec, newSize, oldSize) {
+        if (err) return console.log(err);
+
+        //report the results of the decompression
+        var pct = Math.round(10000*newSize/oldSize)/100;
+        console.log(
+            'Decompressed '+DEC_FILE+' '+
+            'to '+pct+'% the size of '+ENC_FILE+' '+
+            'in '+decompTime+'ms'
+        );
+
+        //compare the hashes
+        var success = hashOfInput === hashOfDec;
+        console.log(success ? 'Files match!' : 'ERROR: data loss');
+    });
+});
