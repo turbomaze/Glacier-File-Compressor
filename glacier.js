@@ -15,27 +15,29 @@ var crypto = require('crypto');
 
 /**********
  * config */
-var IN_FILE = 'in.dat'; //input file for compression
-var ENC_FILE = 'file.ice'; //compressed file
-var DEC_FILE = 'out.dat'; //output file decompression
+var inputDir = './tests/inputs/';
+var glacierDir = './tests/glaciers/';
+var outputDir = './tests/outputs/';
 
 /*************
  * constants */
+var COMP_SUFFIX = '.ice'; //file extension for compressed files
 
 /*********************
  * working variables */
 
 /******************
  * work functions */
-function compress(callback) {
-    var start = +new Date();
-    fs.open(IN_FILE, 'r', function(err, fd) {
+function compress(fileName, callback) {
+    fs.open(fileName, 'r', function(err, fd) {
         if (err) return console.log(err);
 
-        var fileLen = fs.statSync(IN_FILE)['size'];
+        var fileLen = fs.statSync(fileName)['size'];
         var buffer = new Buffer(fileLen);
         fs.read(fd, buffer, 0, fileLen, 0, function(err, num) {
             if (err) return console.log(err);
+
+            var start = +new Date();
 
             //count the occurences of all the bytes
             var countsObj = {};
@@ -101,13 +103,17 @@ function compress(callback) {
             });
 
             //construct the output buffer
-            var outputBuffer = new Buffer(outputBytes);
+            var outBuffer = new Buffer(outputBytes);
 
             //write the file to disk
-            fs.writeFile(ENC_FILE, outputBuffer, 'binary', function(err) {
+            var compFileName = glacierDir + fileName.substring(
+                inputDir.length
+            ) + COMP_SUFFIX;
+            var time = +new Date() - start;
+            fs.writeFile(compFileName, outBuffer, 'binary', function(err) {
                 if (err) return callback(err);
 
-                var time = +new Date() - start;
+                
                 var hash = crypto.createHash('md5')
                                  .update(buffer)
                                  .digest('hex');
@@ -117,18 +123,19 @@ function compress(callback) {
     });
 }
 
-function decompress(callback) {
-    var start = +new Date();
-    fs.open(ENC_FILE, 'r', function(err, fd) {
+function decompress(fileName, callback) {
+    fs.open(fileName, 'r', function(err, fd) {
         if (err) return console.log(err);
 
-        var fileLen = fs.statSync(ENC_FILE)['size'];
+        var fileLen = fs.statSync(fileName)['size'];
         var buffer = new Buffer(fileLen);
         fs.read(fd, buffer, 0, fileLen, 0, function(err, num) {
             if (err) return console.log(err);
-            
-            var ptr = 0;
+
+            var start = +new Date();
+
             //collect the information in the preamble
+            var ptr = 0;
             var bitsInOrigFileLen = parseInt(getBits(buffer, ptr, ptr+=6), 2);
             var numBytesToDecode = parseInt(
                 getBits(buffer, ptr, ptr+=bitsInOrigFileLen), 2
@@ -147,15 +154,19 @@ function decompress(callback) {
             }
 
             //construct the output buffer
-            var outputBuffer = new Buffer(outputBytes);
+            var outBuffer = new Buffer(outputBytes);
 
             //write the file to disk
-            fs.writeFile(DEC_FILE, outputBuffer, 'binary', function(err) {
+            var decompFileName = outputDir + fileName.substring(
+                glacierDir.length, fileName.length - COMP_SUFFIX.length
+            );
+            var time = +new Date() - start;
+            fs.writeFile(decompFileName, outBuffer, 'binary', function(err) {
                 if (err) return callback(err);
 
-                var time = +new Date() - start;
+                
                 var hash = crypto.createHash('md5')
-                                 .update(outputBuffer)
+                                 .update(outBuffer)
                                  .digest('hex');
                 callback(false, time, hash, outputBytes.length, fileLen);
             });
@@ -286,33 +297,43 @@ HuffNode.prototype.traversePath = function(path, fuck) {
     }
 };
 
-//compress the file
-compress(function(err, compTime, hashOfInput, newSize, oldSize) {
+fs.readdir(inputDir, function(err, files) {
     if (err) return console.log(err);
 
-    //report the results of the compression
-    var pct = Math.round(10000*newSize/oldSize)/100;
-    console.log(
-        'Compressed '+ENC_FILE+' '+
-        'to '+pct+'% the size of '+IN_FILE+' '+
-        'in '+compTime+'ms'
-    );
+    files.forEach(function(fileName) {
+        //compress the file
+        compress(
+            inputDir+fileName,
+            function(err, compTime, hashOfInput, newSize, oldSize) {
+                if (err) return console.log(err);
 
-    //decompress the file
-    start = +new Date();
-    decompress(function(err, decompTime, hashOfDec, newSize, oldSize) {
-        if (err) return console.log(err);
+                //report the results of the compression
+                var pct = Math.round(10000*newSize/oldSize)/100;
+                console.log(
+                    'Compressed '+fileName+' '+
+                    'to '+pct+'% its original size '+
+                    'in '+compTime+'ms'
+                );
 
-        //report the results of the decompression
-        var pct = Math.round(10000*newSize/oldSize)/100;
-        console.log(
-            'Decompressed '+DEC_FILE+' '+
-            'to '+pct+'% the size of '+ENC_FILE+' '+
-            'in '+decompTime+'ms'
+                //decompress the file
+                decompress(
+                    glacierDir+fileName+COMP_SUFFIX,
+                    function(err, decompTime, hashOfDec) {
+                        if (err) return console.log(err);
+
+                        //compare the hashes
+                        var success = hashOfInput === hashOfDec;
+                        var prefix = success ? 'S' : 'Uns';
+
+                        //report the results of the decompression
+                        console.log(
+                            prefix+'uccessfully '+
+                            'decompressed '+fileName+COMP_SUFFIX+' '+
+                            'in '+decompTime+'ms'
+                        );
+                    }
+                );
+            }
         );
-
-        //compare the hashes
-        var success = hashOfInput === hashOfDec;
-        console.log(success ? 'Files match!' : 'ERROR: data loss');
     });
 });
