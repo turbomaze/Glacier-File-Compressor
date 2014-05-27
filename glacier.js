@@ -30,7 +30,7 @@ var COMP_SUFFIX = '.ice'; //file extension for compressed files
 /******************
  * work functions */
 function compress(fileName, callback) {
-    fs.readFile(fileName, 'ascii', function(err, data) {
+    fs.readFile(fileName, 'utf-8', function(err, data) {
         if (err) return console.log(err);
 
         var start = +new Date();
@@ -124,12 +124,16 @@ function compress(fileName, callback) {
         for (var ai = 0; ai < smallEncMap.length; ai++) {
             var ngram = getOrder(smallEncMap[ai][0]);
             var tmp = [];
+            var lastIdx = tokens.length-(ngram+1);
+            var replacedLastRound = false;
             for (var bi = 0; bi < tokens.length-ngram; bi++) {
                 var t = tokens[bi];
                 for (var ti = 1; ti <= ngram; ti++) {
                     t += SPLIT_CHAR+tokens[bi+ti];
                 }
                 if (t === smallEncMap[ai][0]) {
+                    if (bi === lastIdx) replacedLastRound = true;
+
                     tmp.push(smallEncMap[ai][1]);
                     if (!smallDecMap.hasOwnProperty(smallEncMap[ai][1])) {
                         smallDecMap[smallEncMap[ai][1]] = t;
@@ -137,8 +141,12 @@ function compress(fileName, callback) {
                     bi += ngram;
                 } else tmp.push(tokens[bi]);
             }
+
             //larger ngrams cut off the last few tokens, so add them
-            tmp.push.apply(tmp, tokens.splice(tokens.length-ngram, ngram));
+            if (!replacedLastRound) { //if they aren't already accounted for
+                var lastFewTokens = tokens.splice(tokens.length-ngram, ngram);
+                tmp.push.apply(tmp, lastFewTokens);
+            }
             tokens = tmp;
         }
 
@@ -151,6 +159,52 @@ function compress(fileName, callback) {
         ) + COMP_SUFFIX;
         var time = +new Date() - start;
         fs.writeFile(compFileName, ret, function (err) {
+            if (err) return callback(err);
+
+            var hash = crypto.createHash('md5')
+                             .update(data)
+                             .digest('hex');
+            callback(false, time, hash, ret.length, data.length);
+        });
+    });
+}
+
+function decompress(fileName, callback) {
+    fs.readFile(fileName, 'utf-8', function(err, data) {
+        if (err) return console.log(err);
+
+        var start = +new Date();
+
+        //get the replacement mappings
+        var idx = data.indexOf('\n');
+        var raw = data.substring(0, idx);
+        var decoder = JSON.parse(raw);
+
+        //apply the mappings
+        var ret = data.substring(idx+1);
+        for (var k in decoder) {
+            var rgx1 = new RegExp('^'+escapeRegEx(k)+SPLIT_CHAR, 'g');
+            var rgx2 = new RegExp(SPLIT_CHAR+escapeRegEx(k)+SPLIT_CHAR, 'g');
+            var rgx3 = new RegExp(SPLIT_CHAR+escapeRegEx(k)+'$', 'g');
+            while (ret.match(rgx1) || ret.match(rgx2) || ret.match(rgx3)) {
+                if (ret.match(rgx2)) {
+                    ret = ret.replace(
+                        rgx2, SPLIT_CHAR+decoder[k]+SPLIT_CHAR
+                    );
+                } else if (ret.match(rgx1)) {
+                    ret = ret.replace(rgx1, decoder[k]+SPLIT_CHAR);
+                } else if (ret.match(rgx3)) {
+                    ret = ret.replace(rgx3, SPLIT_CHAR+decoder[k]);
+                }
+            }
+        }
+
+        //write the file to disk
+        var decompFileName = outputDir + fileName.substring(
+            glacierDir.length, fileName.length - COMP_SUFFIX.length
+        );
+        var time = +new Date() - start;
+        fs.writeFile(decompFileName, ret, function (err) {
             if (err) return callback(err);
 
             var hash = crypto.createHash('md5')
@@ -182,6 +236,14 @@ function getOrder(str) { //unigram, bigram, trigram, etc...
     );
     var search = ret.match(new RegExp(SPLIT_CHAR+'+', 'g'));
     return search ? search.length : 0;
+}
+
+/* 
+stolen from https://developer.mozilla.org/en-US/docs/Web/JavaScript/
+            Guide/Regular_Expressions#Using_Special_Characters
+*/
+function escapeRegEx(str) {
+    return str.replace(/([.*+?^=!:${}()|\[\]\/\\])/g, "\\$1");
 }
 
 function toPercent(percentage, places) {
@@ -244,6 +306,25 @@ fs.readdir(inputDir, function(err, files) {
                     'Compressed '+fileName+' '+
                     'to '+pct+'% its original size '+
                     'in '+compTime+'ms'
+                );
+
+                //decompress the file
+                decompress(
+                    glacierDir+fileName+COMP_SUFFIX,
+                    function(err, decompTime, hashOfDec) {
+                        if (err) return console.log(err);
+
+                        //compare the hashes
+                        var success = hashOfInput === hashOfDec;
+                        var prefix = success ? 'S' : '--- Uns';
+
+                        //report the results of the decompression
+                        console.log(
+                            prefix+'uccessfully '+
+                            'decompressed '+fileName+COMP_SUFFIX+' '+
+                            'in '+decompTime+'ms'
+                        );
+                    }
                 );
             }
         );
