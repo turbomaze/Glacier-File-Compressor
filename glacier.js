@@ -269,9 +269,11 @@ function compressHuff(inName, outName, prTime, prHash, origSize, callback) {
 
                 var hash = prHash;
                 if (hash === -1) {
-                    hash = crypto.createHash('md5').update(data).digest('hex');
+                    hash = crypto.createHash('md5')
+                                 .update(buffer)
+                                 .digest('hex');
                 }
-                origSize = origSize < 0 ? data.length : origSize;
+                origSize = origSize < 0 ? fileLen : origSize;
                 callback(
                     false, time+prTime, hash, outputBytes.length, origSize
                 );
@@ -364,9 +366,7 @@ function decompressHuff(inName, outName, prTime, callback) {
                 var hash = crypto.createHash('md5')
                                  .update(outBuffer)
                                  .digest('hex');
-                callback(
-                    false, time+prTime, hash, outputBytes.length, fileLen
-                );
+                callback(false, time+prTime, hash);
             });
         });
     });
