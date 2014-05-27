@@ -22,7 +22,6 @@ var outputDir = './tests/outputs/';
 
 /*************
  * constants */
-var splitCharsPatn = new RegExp(SPLIT_CHAR, 'g');
 var COMP_SUFFIX = '.ice'; //file extension for compressed files
 
 /*********************
@@ -46,7 +45,7 @@ function compress(fileName, callback) {
         }
 
         //count the ngrams
-        var tokens = data.split(SPLIT_CHAR);
+        var tokens = tokenize(data);
         var countsObj = {};
         for (var ni = 0; ni < MAX_N_GRAM; ni++) {
             for (var ai = 0; ai < tokens.length; ai++) {
@@ -92,7 +91,7 @@ function compress(fileName, callback) {
         //remove unreachable mappings (bi/tri grams preceded by unigrams)
         var smallEncMap = [];
         for (var ai = 0; ai < encodeMap.length; ai++) {
-            var parts = encodeMap[ai][0].split(SPLIT_CHAR);
+            var parts = tokenize(encodeMap[ai][0]);
             if (parts.length > 1) { //bigram or above
                 var reachable = true;
                 //for each feasible sub-ngrams size
@@ -123,8 +122,7 @@ function compress(fileName, callback) {
 
         //step through the replacements
         for (var ai = 0; ai < smallEncMap.length; ai++) {
-            var search = smallEncMap[ai][0].match(splitCharsPatn);
-            var ngram = search ? search.length : 0;
+            var ngram = getOrder(smallEncMap[ai][0]);
             var tmp = [];
             for (var bi = 0; bi < tokens.length-ngram; bi++) {
                 var t = tokens[bi];
@@ -165,6 +163,27 @@ function compress(fileName, callback) {
 
 /********************
  * helper functions */
+function tokenize(str) {
+    var ret = str.split(new RegExp('('+SPLIT_CHAR+'+)', 'g'));
+    for (var ai = 0; ai < ret.length; ai++) {
+        if (ret[ai].match(new RegExp('[^'+SPLIT_CHAR+']', 'g'))) continue;
+
+        if (ai === 0)ret[ai+1] = ret[ai]+ret[ai+1];
+        else ret[ai-1] += ret[ai].substring(1);
+
+        ret.splice(ai, 1), ai--;
+    }
+    return ret;
+}
+
+function getOrder(str) { //unigram, bigram, trigram, etc...
+    var ret = str.replace(
+        new RegExp('^'+SPLIT_CHAR+'+|'+SPLIT_CHAR+'+$', 'g'), ''
+    );
+    var search = ret.match(new RegExp(SPLIT_CHAR+'+', 'g'));
+    return search ? search.length : 0;
+}
+
 function toPercent(percentage, places) {
     return round(100*percentage, places)+'%';
 }
