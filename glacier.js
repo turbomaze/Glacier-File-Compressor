@@ -22,23 +22,31 @@ var outputDir = './tests/outputs/';
 
 /*************
  * constants */
-var COMP_SUFFIX = '.ice'; //file extension for compressed files
+var CMPR_SFX = '.ice'; //file extension for compressed files
 
 /*********************
  * working variables */
 
 /******************
  * work functions */
-function compress(fileName, callback) {
-    compressTxtSpk(fileName, 0, -1, -1, callback);
+function compress(inName, outName, callback) {
+    compressTxtSpk(inName, outName, 0, -1, -1,
+        function(err, t, h, newSize, oldSize) {
+            compressHuff(
+                outName, outName, t, h, oldSize, callback
+            );
+        }
+    );
 }
 
-function decompress(fileName, callback) {
-    decompressTxtSpk(fileName, 0, callback);
+function decompress(inName, outName, callback) {
+    decompressHuff(inName, inName, 0, function(err, t, h, newSize, oldSize) {
+        decompressTxtSpk(inName, outName, t, callback);
+    });
 }
 
-function compressTxtSpk(fileName, prevTime, prevHash, origSize, callback) {
-    fs.readFile(fileName, 'utf-8', function(err, data) {
+function compressTxtSpk(inName, outName, prTime, prHash, origSize, callback) {
+    fs.readFile(inName, 'utf-8', function(err, data) {
         if (err) return console.log(err);
 
         var start = +new Date();
@@ -162,28 +170,25 @@ function compressTxtSpk(fileName, prevTime, prevHash, origSize, callback) {
         var ret = JSON.stringify(smallDecMap)+'\n'+tokens.join(SPLIT_CHAR);
 
         //write it to a file
-        var compFileName = glacierDir + fileName.substring(
-            inputDir.length
-        ) + COMP_SUFFIX;
         var time = +new Date() - start;
-        fs.writeFile(compFileName, ret, function (err) {
+        fs.writeFile(outName, ret, function (err) {
             if (err) return callback(err);
 
-            var hash = prevHash;
+            var hash = prHash;
             if (hash === -1) {
                 hash = crypto.createHash('md5').update(data).digest('hex');
             }
             origSize = origSize < 0 ? data.length : origSize;
-            callback(false, time+prevTime, hash, ret.length, origSize);
+            callback(false, time+prTime, hash, ret.length, origSize);
         });
     });
 }
 
-function compressHuffman(fileName, callback) {
-    fs.open(fileName, 'r', function(err, fd) {
+function compressHuff(inName, outName, prTime, prHash, origSize, callback) {
+    fs.open(inName, 'r', function(err, fd) {
         if (err) return console.log(err);
 
-        var fileLen = fs.statSync(fileName)['size'];
+        var fileLen = fs.statSync(inName)['size'];
         var buffer = new Buffer(fileLen);
         fs.read(fd, buffer, 0, fileLen, 0, function(err, num) {
             if (err) return console.log(err);
@@ -257,25 +262,25 @@ function compressHuffman(fileName, callback) {
             var outBuffer = new Buffer(outputBytes);
 
             //write the file to disk
-            var compFileName = glacierDir + fileName.substring(
-                inputDir.length
-            ) + COMP_SUFFIX;
             var time = +new Date() - start;
-            fs.writeFile(compFileName, outBuffer, 'binary', function(err) {
+            fs.writeFile(outName, outBuffer, 'binary', function(err) {
                 if (err) return callback(err);
 
-                
-                var hash = crypto.createHash('md5')
-                                 .update(buffer)
-                                 .digest('hex');
-                callback(false, time, hash, outputBytes.length, fileLen);
+                var hash = prHash;
+                if (hash === -1) {
+                    hash = crypto.createHash('md5').update(data).digest('hex');
+                }
+                origSize = origSize < 0 ? data.length : origSize;
+                callback(
+                    false, time+prTime, hash, outputBytes.length, origSize
+                );
             });
         });
     });
 }
 
-function decompressTxtSpk(fileName, prevTime, callback) {
-    fs.readFile(fileName, 'utf-8', function(err, data) {
+function decompressTxtSpk(inName, outName, prTime, callback) {
+    fs.readFile(inName, 'utf-8', function(err, data) {
         if (err) return console.log(err);
 
         var start = +new Date();
@@ -305,26 +310,23 @@ function decompressTxtSpk(fileName, prevTime, callback) {
         }
 
         //write the file to disk
-        var decompFileName = outputDir + fileName.substring(
-            glacierDir.length, fileName.length - COMP_SUFFIX.length
-        );
         var time = +new Date() - start;
-        fs.writeFile(decompFileName, ret, function (err) {
+        fs.writeFile(outName, ret, function (err) {
             if (err) return callback(err);
 
             var hash = crypto.createHash('md5')
                              .update(ret)
                              .digest('hex');
-            callback(false, time+prevTime, hash);
+            callback(false, time+prTime, hash);
         });
     });
 }
 
-function decompressHuffman(fileName, callback) {
-    fs.open(fileName, 'r', function(err, fd) {
+function decompressHuff(inName, outName, prTime, callback) {
+    fs.open(inName, 'r', function(err, fd) {
         if (err) return console.log(err);
 
-        var fileLen = fs.statSync(fileName)['size'];
+        var fileLen = fs.statSync(inName)['size'];
         var buffer = new Buffer(fileLen);
         fs.read(fd, buffer, 0, fileLen, 0, function(err, num) {
             if (err) return console.log(err);
@@ -354,18 +356,16 @@ function decompressHuffman(fileName, callback) {
             var outBuffer = new Buffer(outputBytes);
 
             //write the file to disk
-            var decompFileName = outputDir + fileName.substring(
-                glacierDir.length, fileName.length - COMP_SUFFIX.length
-            );
             var time = +new Date() - start;
-            fs.writeFile(decompFileName, outBuffer, 'binary', function(err) {
+            fs.writeFile(outName, outBuffer, 'binary', function(err) {
                 if (err) return callback(err);
 
-                
                 var hash = crypto.createHash('md5')
                                  .update(outBuffer)
                                  .digest('hex');
-                callback(false, time, hash, outputBytes.length, fileLen);
+                callback(
+                    false, time+prTime, hash, outputBytes.length, fileLen
+                );
             });
         });
     });
@@ -392,18 +392,6 @@ function getOrder(str) { //unigram, bigram, trigram, etc...
     );
     var search = ret.match(new RegExp(SPLIT_CHAR+'+', 'g'));
     return search ? search.length : 0;
-}
-
-/* 
-| stolen from https://developer.mozilla.org/en-US/docs/Web/JavaScript/
-|   Guide/Regular_Expressions#Using_Special_Characters
-*/
-function escapeRegEx(str) {
-    return str.replace(/([.*+?^=!:${}()|\[\]\/\\])/g, "\\$1");
-}
-
-function toPercent(percentage, places) {
-    return round(100*percentage, places)+'%';
 }
 
 function parseHuffTree(tree) {
@@ -464,8 +452,53 @@ function bitsIn(n) {
     return Math.ceil(Math.log(n)/Math.log(2));
 }
 
+/* 
+| stolen from https://developer.mozilla.org/en-US/docs/Web/JavaScript/
+|   Guide/Regular_Expressions#Using_Special_Characters
+*/
+function escapeRegEx(str) {
+    return str.replace(/([.*+?^=!:${}()|\[\]\/\\])/g, "\\$1");
+}
+
+function toPercent(percentage, places) {
+    return round(100*percentage, places)+'%';
+}
+
+function round(n, p) {
+    var f = Math.pow(10, p);
+    return Math.round(f*n)/f;
+}
+
 /***********
  * objects */
+function StringIteratorMonad(s) {
+    var ret = arguments.length > 0 ? s : incrString('');
+    return function() {
+        return ret;
+    };
+}
+function mb(f, mv) { //monad bind
+    return StringIteratorMonad(f(mv));
+}
+function mIncrString(mv) {
+    return incrString(mv());
+}
+function incrString(str) {
+    var low = 33, high = 126; //both inclusive
+    var l = str.length;
+    
+    if (l === 0) return String.fromCharCode(low);
+
+    var lastCharsCharCode = str.charCodeAt(l-1);
+    if (lastCharsCharCode < high) { //then you can just increment it
+        return str.substring(0, l-1)+String.fromCharCode(lastCharsCharCode+1);
+    } else if (l === 1) { 
+        return new Array(l+2).join(String.fromCharCode(low));
+    } else {
+        return incrString(str.substring(0,l-1))+String.fromCharCode(low);
+    }
+}
+
 function HuffNode(freq, value) {
     this.freq = arguments.length > 0 ? freq : 0;
     this.value = arguments.length > 1 ? value : undefined;
@@ -536,6 +569,7 @@ fs.readdir(inputDir, function(err, files) {
         //compress the file
         compress(
             inputDir+fileName,
+            glacierDir+fileName+CMPR_SFX,
             function(err, compTime, hashOfInput, newSize, oldSize) {
                 if (err) return console.log(err);
 
@@ -549,7 +583,8 @@ fs.readdir(inputDir, function(err, files) {
 
                 //decompress the file
                 decompress(
-                    glacierDir+fileName+COMP_SUFFIX,
+                    glacierDir+fileName+CMPR_SFX,
+                    outputDir+fileName,
                     function(err, decompTime, hashOfDec) {
                         if (err) return console.log(err);
 
@@ -560,7 +595,7 @@ fs.readdir(inputDir, function(err, files) {
                         //report the results of the decompression
                         console.log(
                             prefix+'uccessfully '+
-                            'decompressed '+fileName+COMP_SUFFIX+' '+
+                            'decompressed '+fileName+CMPR_SFX+' '+
                             'in '+decompTime+'ms'
                         );
                     }
