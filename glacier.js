@@ -30,6 +30,14 @@ var COMP_SUFFIX = '.ice'; //file extension for compressed files
 /******************
  * work functions */
 function compress(fileName, callback) {
+    compressTxtSpk(fileName, 0, -1, -1, callback);
+}
+
+function decompress(fileName, callback) {
+    decompressTxtSpk(fileName, 0, callback);
+}
+
+function compressTxtSpk(fileName, prevTime, prevHash, origSize, callback) {
     fs.readFile(fileName, 'utf-8', function(err, data) {
         if (err) return console.log(err);
 
@@ -59,7 +67,7 @@ function compress(fileName, callback) {
         //turn those counts into scores
         var scores = [];
         for (var token in countsObj) {
-            var score = token.length*countsObj[token]; //number of characters saved
+            var score = token.length*countsObj[token]; //# of characters saved
             score -= 6; //punctuation in the JSON
             score -= token.length; //length of the token in the JSON
             //the length of the replace string will be subtracted later
@@ -161,15 +169,17 @@ function compress(fileName, callback) {
         fs.writeFile(compFileName, ret, function (err) {
             if (err) return callback(err);
 
-            var hash = crypto.createHash('md5')
-                             .update(data)
-                             .digest('hex');
-            callback(false, time, hash, ret.length, data.length);
+            var hash = prevHash;
+            if (hash === -1) {
+                hash = crypto.createHash('md5').update(data).digest('hex');
+            }
+            origSize = origSize < 0 ? data.length : origSize;
+            callback(false, time+prevTime, hash, ret.length, origSize);
         });
     });
 }
 
-function decompress(fileName, callback) {
+function decompressTxtSpk(fileName, prevTime, callback) {
     fs.readFile(fileName, 'utf-8', function(err, data) {
         if (err) return console.log(err);
 
@@ -210,7 +220,7 @@ function decompress(fileName, callback) {
             var hash = crypto.createHash('md5')
                              .update(ret)
                              .digest('hex');
-            callback(false, time, hash, ret.length, data.length);
+            callback(false, time+prevTime, hash);
         });
     });
 }
