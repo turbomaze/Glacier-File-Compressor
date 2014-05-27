@@ -7,6 +7,9 @@
 | @edit 2014/05/25 |
 \******************/
 
+/* problems with the end of the file */
+
+
 var fs = require('fs');
 
 /**********
@@ -65,7 +68,6 @@ function compress() {
             //map each byte to its traversal path
             var encoder = {};
             root.traverse(encoder, '');
-console.log(encoder);
 
             //assemble the file preamble
             var preamble = '';
@@ -89,6 +91,9 @@ console.log(encoder);
 
             //turn those strings of 1s and 0s into a byte array
             var entireFile = preamble + encodedFile;
+            //number of bits must be divisible by 8
+            var numZerosToAppend = (8 - entireFile.length%8)%8;
+            for (var ai = 0; ai < numZerosToAppend; ai++) entireFile += '0';
             var outputBytes = entireFile.match(/.{1,8}/g).map(function(a) {
                 return parseInt(a, 2);
             });
@@ -130,7 +135,7 @@ function decompress() {
             var outputBytes = [];
             var allPaths = getBits(buffer, ptr, 8*fileLen);
             for (var ai = 0; ai < numBytesToDecode; ai++) {
-                var result = decoder.traversePath(allPaths);
+                var result = decoder.traversePath(allPaths, ai);
                 outputBytes.push(result[0]);
                 allPaths = result[1];
             }
@@ -265,9 +270,9 @@ HuffNode.prototype.traversePath = function(path, fuck) {
     } else { //go left or right and recurse
         var step = parseInt(path.charAt(0));
         if (step === 0) {
-            return this.left.traversePath(path.substring(1));
+            return this.left.traversePath(path.substring(1), fuck);
         } else {
-            return this.right.traversePath(path.substring(1));
+            return this.right.traversePath(path.substring(1), fuck);
         }
     }
 };
