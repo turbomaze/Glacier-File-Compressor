@@ -18,6 +18,7 @@ var SPLIT_CHAR = ' ';
 
 var inputDir = './tests/inputs/';
 var glacierDir = './tests/glaciers/';
+var tmpDir = './tests/tmp/';
 var outputDir = './tests/outputs/';
 
 /*************
@@ -39,9 +40,9 @@ function compress(inName, outName, callback) {
     );
 }
 
-function decompress(inName, outName, callback) {
-    decompressHuff(inName, inName, 0, function(err, t, h, newSize, oldSize) {
-        decompressTxtSpk(inName, outName, t, callback);
+function decompress(inName, medName, outName, callback) {
+    decompressHuff(inName, medName, 0, function(err, t, h, newSize, oldSize) {
+        decompressTxtSpk(medName, outName, t, callback);
     });
 }
 
@@ -584,6 +585,7 @@ fs.readdir(inputDir, function(err, files) {
                 //decompress the file
                 decompress(
                     glacierDir+fileName+CMPR_SFX,
+                    tmpDir+fileName+CMPR_SFX,
                     outputDir+fileName,
                     function(err, decompTime, hashOfDec) {
                         if (err) return console.log(err);
