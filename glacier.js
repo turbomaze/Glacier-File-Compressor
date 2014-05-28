@@ -12,9 +12,13 @@ var crypto = require('crypto');
 
 /**********
  * config */
-var MAX_NUM_REPL = 14000;
+//Txt Spk
+var MAX_NUM_REPL = 10*1000;
 var MAX_N_GRAM = 2;
 var SPLIT_CHAR = ' ';
+
+//LZW
+var CHUNK_SIZE = 16;
 
 var inputDir = './tests/inputs/';
 var glacierDir = './tests/glaciers/';
@@ -31,19 +35,11 @@ var CMPR_SFX = '.ice'; //file extension for compressed files
 /******************
  * work functions */
 function compress(inName, outName, callback) {
-    compressTxtSpk(inName, outName, 0, -1, -1,
-        function(err, t, h, newSize, oldSize) {
-            compressHuff(
-                outName, outName, t, h, oldSize, callback
-            );
-        }
-    );
+    compressLZW(inName, outName, 0, -1, -1, callback);
 }
 
 function decompress(inName, medName, outName, callback) {
-    decompressHuff(inName, medName, 0, function(err, t, h, newSize, oldSize) {
-        decompressTxtSpk(medName, outName, t, callback);
-    });
+    decompressLZW(inName, outName, 0, callback);
 }
 
 function compressTxtSpk(inName, outName, prTime, prHash, origSize, callback) {
@@ -282,6 +278,77 @@ function compressHuff(inName, outName, prTime, prHash, origSize, callback) {
     });
 }
 
+function compressLZW(inName, outName, prTime, prHash, origSize, callback) {
+    fs.open(inName, 'r', function(err, fd) {
+        if (err) return console.log(err);
+
+        var fileLen = fs.statSync(inName)['size'];
+        var buffer = new Buffer(fileLen);
+        fs.read(fd, buffer, 0, fileLen, 0, function(err, num) {
+            if (err) return console.log(err);
+
+            var start = +new Date();
+
+            //construct the dictionary
+            var maxIdx = Math.pow(2, CHUNK_SIZE);
+            var nextIdx = 256;
+            var dictionary = {};
+            for (var ai = 0; ai < nextIdx; ai++) dictionary[ai] = ai;
+            var outputChunks = [];
+            var prev = -1;
+            var current = buffer[0];
+            for (var ai = 0; ai <= buffer.length; ai++)  {
+                if (!dictionary.hasOwnProperty(current)) {
+                    outputChunks.push(dictionary[prev]);
+                    if (nextIdx < maxIdx) {
+                        dictionary[current] = nextIdx, nextIdx++;
+                    }
+                    prev = buffer[ai];
+                    current = buffer[ai]+','+buffer[ai+1];
+                } else {
+                    if (prev === -1) prev = buffer[ai];
+                    else prev += ','+buffer[ai];
+                    current += ','+buffer[ai+1];
+                }
+            }
+
+            //turn the chunks into a string of bits
+            var outputStr = ''
+            for (var ai = 0; ai < outputChunks.length; ai++) {
+                outputStr += numToBinString(outputChunks[ai], CHUNK_SIZE/8);
+            }
+
+            //turn those strings of 1s and 0s into a byte array
+            //the number of bits must be divisible by 8, so append some
+            var numToAppend = (8 - outputStr.length%8)%8;
+            for (var ai = 0; ai < numToAppend; ai++) outputStr += '0';
+            var outputBytes = outputStr.match(/.{1,8}/g).map(function(a) {
+                return parseInt(a, 2);
+            });
+
+            //construct the output buffer
+            var outBuffer = new Buffer(outputBytes);
+
+            //write the file to disk
+            var time = +new Date() - start;
+            fs.writeFile(outName, outBuffer, 'binary', function(err) {
+                if (err) return callback(err);
+
+                var hash = prHash;
+                if (hash === -1) {
+                    hash = crypto.createHash('md5')
+                                 .update(buffer)
+                                 .digest('hex');
+                }
+                origSize = origSize < 0 ? fileLen : origSize;
+                callback(
+                    false, time+prTime, hash, outputBytes.length, origSize
+                );
+            });
+        });
+    });
+}
+
 function decompressTxtSpk(inName, outName, prTime, callback) {
     fs.readFile(inName, 'utf-8', function(err, data) {
         if (err) return console.log(err);
@@ -353,6 +420,92 @@ function decompressHuff(inName, outName, prTime, callback) {
                 var result = decoder.traversePath(allPaths, ai);
                 outputBytes.push(result[0]);
                 allPaths = result[1];
+            }
+
+            //construct the output buffer
+            var outBuffer = new Buffer(outputBytes);
+
+            //write the file to disk
+            var time = +new Date() - start;
+            fs.writeFile(outName, outBuffer, 'binary', function(err) {
+                if (err) return callback(err);
+
+                var hash = crypto.createHash('md5')
+                                 .update(outBuffer)
+                                 .digest('hex');
+                callback(false, time+prTime, hash);
+            });
+        });
+    });
+}
+
+function decompressLZW(inName, outName, prTime, callback) {
+    fs.open(inName, 'r', function(err, fd) {
+        if (err) return console.log(err);
+
+        var fileLen = fs.statSync(inName)['size'];
+        var buffer = new Buffer(fileLen);
+        fs.read(fd, buffer, 0, fileLen, 0, function(err, num) {
+            if (err) return console.log(err);
+
+            var start = +new Date();
+
+            //remove the trailing bits that don't do anything
+            var binStr = getBits(buffer, 0, 8*fileLen);
+            var numToRemove = (8*fileLen)%CHUNK_SIZE;
+            binStr = binStr.substring(0, (8*fileLen)-numToRemove);
+
+            //turn the string of bits into chunks
+            var rgx = new RegExp('.{'+CHUNK_SIZE+'}', 'g');
+            var inputChunks = binStr.match(rgx).map(function(a) {
+                return parseInt(a, 2);
+            });
+
+            //helper functions for building the dictionary
+            var idx = 0;
+            function readCode() {
+                if (idx >= inputChunks.length) return false;
+                else {
+                    idx++;
+                    return inputChunks[idx-1];
+                }
+            }
+            var outputBytes = [];
+            function output(arr) { //outputs each byte in arr
+                for (var ai = 0; ai < arr.length; ai++) {
+                    outputBytes.push(arr[ai]);
+                }
+            }
+
+            //construct the dictionary
+            var maxIdx = Math.pow(2, CHUNK_SIZE);
+            var nextIdx = 256;
+            var rdict = []; //reverse dictionary
+            for (var ai = 0; ai < nextIdx; ai++) rdict[ai] = [ai]; //load it ip
+
+            var entry;
+            var c = inputChunks[0]; //current code
+            var p = [c]; //previous string
+            output(p);
+            for (var ai = 1; ai < inputChunks.length; ai++) {
+                c = inputChunks[ai];
+                if (rdict[c]) {
+                    entry = rdict[c];
+                    output(entry);
+                    if (nextIdx < maxIdx) {
+                        var newEntry = p.slice(0);
+                        newEntry.push(entry[0]);
+                        rdict[nextIdx] = newEntry, nextIdx++;
+                    }
+                    p = entry.slice(0);
+                } else {
+                    entry = p.slice(0), entry.push(p[0]);
+                    output(entry);
+                    if (nextIdx < maxIdx) {
+                        rdict[nextIdx] = entry, nextIdx++;
+                    }
+                    p = entry.slice(0);
+                }
             }
 
             //construct the output buffer
