@@ -17,6 +17,9 @@ var MAX_NUM_REPL = 10*1000;
 var MAX_N_GRAM = 2;
 var SPLIT_CHAR = ' ';
 
+//Huffman
+var SYMBOL_SIZE = 8;
+
 //LZW
 var CHUNK_SIZE = 16;
 
@@ -35,11 +38,19 @@ var CMPR_SFX = '.ice'; //file extension for compressed files
 /******************
  * work functions */
 function compress(inName, outName, callback) {
-    compressLZW(inName, outName, 0, -1, -1, callback);
+    compressLZW(inName, outName, 0, -1, -1,
+        function(err, t, h, newSize, oldSize) {
+            compressHuff(outName, outName, t, h, oldSize,callback);
+        }
+    );
 }
 
 function decompress(inName, medName, outName, callback) {
-    decompressLZW(inName, outName, 0, callback);
+    decompressHuff(inName, medName, 0,
+        function(err, t, h) {
+            decompressLZW(medName, outName, t, callback);
+        }
+    );
 }
 
 function compressTxtSpk(inName, outName, prTime, prHash, origSize, callback) {
@@ -192,14 +203,25 @@ function compressHuff(inName, outName, prTime, prHash, origSize, callback) {
 
             var start = +new Date();
 
+            //remove the trailing bits that don't do anything
+            var binStr = getBits(buffer, 0, 8*fileLen);
+            var numToRemove = (8*fileLen)%SYMBOL_SIZE;
+            binStr = binStr.substring(0, (8*fileLen)-numToRemove);
+
+            //turn the string of bits into chunks
+            var rgx = new RegExp('.{'+SYMBOL_SIZE+'}', 'g');
+            var inputSymbols = binStr.match(rgx).map(function(a) {
+                return parseInt(a, 2);
+            });
+
             //count the occurences of all the bytes
             var countsObj = {};
             var total = 0;
             for (var ai = 0; ai < fileLen; ai++) {
                 total += 1;
-                if (countsObj.hasOwnProperty(buffer[ai])) {
-                    countsObj[buffer[ai]] += 1;
-                } else countsObj[buffer[ai]] = 1;
+                if (countsObj.hasOwnProperty(inputSymbols[ai])) {
+                    countsObj[inputSymbols[ai]] += 1;
+                } else countsObj[inputSymbols[ai]] = 1;
             }
 
             //turn each byte into a leaf HuffNode
@@ -228,11 +250,11 @@ function compressHuff(inName, outName, prTime, prHash, origSize, callback) {
 
             //assemble the file preamble
             var preamble = '';
-            //6 bits: the # of bits to describe the # bytes in the file
-            var bitsInFileLen = bitsIn(fileLen);
+            //6 bits: the # of bits to describe the # symbols in the file
+            var bitsInFileLen = bitsIn(inputSymbols.length);
             preamble += byteToBinString(bitsInFileLen).substring(2, 8);
-            //n bits: how many bytes are in the uncompressed file
-            preamble += fileLen.toString(2);
+            //n bits: how many symbols are in the uncompressed file
+            preamble += inputSymbols.length.toString(2);
             //16 bits: number of bits in the serialized Huffman tree
             var huffTree = root.serialize();
             var bitsInHuffTree = huffTree.length;
@@ -242,8 +264,8 @@ function compressHuff(inName, outName, prTime, prHash, origSize, callback) {
 
             //form a bin string by applying the encodings to the input file
             var encodedFile = '';
-            for (var ai = 0; ai < fileLen; ai++) {
-                encodedFile += encoder[buffer[ai]];
+            for (var ai = 0; ai < inputSymbols.length; ai++) {
+                encodedFile += encoder[inputSymbols[ai]];
             }
 
             //turn those strings of 1s and 0s into a byte array
@@ -406,7 +428,7 @@ function decompressHuff(inName, outName, prTime, callback) {
             //collect the information in the preamble
             var ptr = 0;
             var bitsInOrigFileLen = parseInt(getBits(buffer, ptr, ptr+=6), 2);
-            var numBytesToDecode = parseInt(
+            var numSymbolsToDecode = parseInt(
                 getBits(buffer, ptr, ptr+=bitsInOrigFileLen), 2
             );
             var bitsInHuffTree = parseInt(getBits(buffer, ptr, ptr+=16), 2);
@@ -414,13 +436,29 @@ function decompressHuff(inName, outName, prTime, callback) {
             var decoder = parseHuffTree(serializedTree);
 
             //decode the file
-            var outputBytes = [];
+            var outputSymbols = [];
             var allPaths = getBits(buffer, ptr, 8*fileLen);
-            for (var ai = 0; ai < numBytesToDecode; ai++) {
+            for (var ai = 0; ai < numSymbolsToDecode; ai++) {
                 var result = decoder.traversePath(allPaths, ai);
-                outputBytes.push(result[0]);
+                outputSymbols.push(result[0]);
                 allPaths = result[1];
             }
+
+            //turn the symbols into a bit string
+            var decodedFile = '';
+            for (var ai = 0; ai < outputSymbols.length; ai++) {
+                decodedFile += numToBinString(
+                    outputSymbols[ai], SYMBOL_SIZE/8
+                );
+            }
+
+            //turn those strings of 1s and 0s into a byte array
+            //the number of bits must be divisible by 8, so append some
+            var numToAppend = (8 - decodedFile.length%8)%8;
+            for (var ai = 0; ai < numToAppend; ai++) decodedFile += '0';
+            var outputBytes = decodedFile.match(/.{1,8}/g).map(function(a) {
+                return parseInt(a, 2);
+            });
 
             //construct the output buffer
             var outBuffer = new Buffer(outputBytes);
@@ -560,9 +598,9 @@ function parseHuffTree(tree) {
             tree = tree.substring(1);
             queue.push(node);
         } else { //leaf node
-            var value = parseInt(tree.substring(1, 9), 2);
+            var value = parseInt(tree.substring(1, SYMBOL_SIZE+1), 2);
             node = new HuffNode(0, value); //freq doesn't matter
-            tree = tree.substring(9);
+            tree = tree.substring(SYMBOL_SIZE+1);
         }
         if (queue[0].left === undefined) queue[0].left = node;
         else if (queue[0].right === undefined) {
@@ -674,8 +712,8 @@ HuffNode.prototype.setRight = function(node) {
     this.freq += node.freq;
 };
 HuffNode.prototype.serialize = function() {
-    if (this.value !== undefined) { //leaf node?
-        return '1'+byteToBinString(this.value); //then it's easy peasy
+    if (this.value !== undefined) { //leaf nodes are easy peasy
+        return '1'+numToBinString(this.value, SYMBOL_SIZE/8);
     } else { //normal node with a left part and a right part
         var ret = '0';
         var stack = [this.left, this.right];
