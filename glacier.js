@@ -4,7 +4,7 @@
 | @author Anthony  |
 | @version 0.1     |
 | @date 2014/05/21 |
-| @edit 2014/05/27 |
+| @edit 2014/06/02 |
 \******************/
 
 var fs = require('fs');
@@ -37,23 +37,23 @@ var CMPR_SFX = '.ice'; //file extension for compressed files
 
 /******************
  * work functions */
-function compress(inName, outName, callback) {
-    compressLZW(inName, outName, 0, -1, -1,
+function compress(inName, outName, cb) {
+    /*compressTxtSpk(inName, outName, 0, -1, -1,
         function(err, t, h, newSize, oldSize) {
-            compressHuff(outName, outName, t, h, oldSize,callback);
+            compressHighHuff(
+                outName, outName, t, h, oldSize, cb
+            );
         }
-    );
+    );*/
+    compressHighHuff(inName, outName, 0, -1, -1, cb);
 }
 
-function decompress(inName, medName, outName, callback) {
-    decompressHuff(inName, medName, 0,
-        function(err, t, h) {
-            decompressLZW(medName, outName, t, callback);
-        }
-    );
+function decompress(inName, medName, outName, cb) {
+    //decompressHuff(inName, outName, 0, cb);
+    cb(false, -1, 'N/A');
 }
 
-function compressTxtSpk(inName, outName, prTime, prHash, origSize, callback) {
+function compressTxtSpk(inName, outName, prTime, prHash, origSize, cb) {
     fs.readFile(inName, 'utf-8', function(err, data) {
         if (err) return console.log(err);
 
@@ -180,19 +180,19 @@ function compressTxtSpk(inName, outName, prTime, prHash, origSize, callback) {
         //write it to a file
         var time = +new Date() - start;
         fs.writeFile(outName, ret, function (err) {
-            if (err) return callback(err);
+            if (err) return cb(err);
 
             var hash = prHash;
             if (hash === -1) {
                 hash = crypto.createHash('md5').update(data).digest('hex');
             }
             origSize = origSize < 0 ? data.length : origSize;
-            callback(false, time+prTime, hash, ret.length, origSize);
+            cb(false, time+prTime, hash, ret.length, origSize);
         });
     });
 }
 
-function compressHuff(inName, outName, prTime, prHash, origSize, callback) {
+function compressHuff(inName, outName, prTime, prHash, origSize, cb) {
     fs.open(inName, 'r', function(err, fd) {
         if (err) return console.log(err);
 
@@ -283,7 +283,7 @@ function compressHuff(inName, outName, prTime, prHash, origSize, callback) {
             //write the file to disk
             var time = +new Date() - start;
             fs.writeFile(outName, outBuffer, 'binary', function(err) {
-                if (err) return callback(err);
+                if (err) return cb(err);
 
                 var hash = prHash;
                 if (hash === -1) {
@@ -292,7 +292,7 @@ function compressHuff(inName, outName, prTime, prHash, origSize, callback) {
                                  .digest('hex');
                 }
                 origSize = origSize < 0 ? fileLen : origSize;
-                callback(
+                cb(
                     false, time+prTime, hash, outputBytes.length, origSize
                 );
             });
@@ -300,7 +300,7 @@ function compressHuff(inName, outName, prTime, prHash, origSize, callback) {
     });
 }
 
-function compressLZW(inName, outName, prTime, prHash, origSize, callback) {
+function compressLZW(inName, outName, prTime, prHash, origSize, cb) {
     fs.open(inName, 'r', function(err, fd) {
         if (err) return console.log(err);
 
@@ -354,7 +354,7 @@ function compressLZW(inName, outName, prTime, prHash, origSize, callback) {
             //write the file to disk
             var time = +new Date() - start;
             fs.writeFile(outName, outBuffer, 'binary', function(err) {
-                if (err) return callback(err);
+                if (err) return cb(err);
 
                 var hash = prHash;
                 if (hash === -1) {
@@ -363,7 +363,7 @@ function compressLZW(inName, outName, prTime, prHash, origSize, callback) {
                                  .digest('hex');
                 }
                 origSize = origSize < 0 ? fileLen : origSize;
-                callback(
+                cb(
                     false, time+prTime, hash, outputBytes.length, origSize
                 );
             });
@@ -371,7 +371,148 @@ function compressLZW(inName, outName, prTime, prHash, origSize, callback) {
     });
 }
 
-function decompressTxtSpk(inName, outName, prTime, callback) {
+function compressHighHuff(inName, outName, prTime, prHash, origSize, cb) {
+    /* High Huffman Encoding
+     *
+     * This scheme of mine creates separate Huffman trees for each byte in the
+     * file. It assumes that certain characters are more likely to be followed
+     * by certain other characters. If true, then separate trees for each byte
+     * should aid the encoder in using as few bits as possible to specify each
+     * character. The knowledge of which tree to use is contained in the prior
+     * characters, so the decoder should still be able to decompress the file.
+     *
+     */
+
+    fs.open(inName, 'r', function(err, fd) {
+        if (err) return console.log(err);
+
+        var fileLen = fs.statSync(inName)['size'];
+        var buffer = new Buffer(fileLen);
+        fs.read(fd, buffer, 0, fileLen, 0, function(err, num) {
+            if (err) return console.log(err);
+
+            var start = +new Date();
+
+            //count the occurences of all the bytes
+            var countsObjs = {}; //a bunch of individual byte counters
+            var totals = {};
+            for (var ai = 1; ai < fileLen; ai++) { //skip the first byte
+                //tally up the totals in the correct spot
+                var prevByte = buffer[ai-1];
+                if (totals.hasOwnProperty(prevByte)) {
+                    totals[prevByte] += 1;
+                } else totals[prevByte] = 1;
+
+                //ensure the previous byte has a spot in the counter
+                if (!countsObjs.hasOwnProperty(prevByte)) {
+                    countsObjs[prevByte] = {};
+                }
+
+                //add the current character to the relevant counter
+                var relevCounts = countsObjs[prevByte];
+                if (relevCounts.hasOwnProperty(buffer[ai])) {
+                    relevCounts[buffer[ai]] += 1;
+                } else relevCounts[buffer[ai]] = 1;
+            }
+
+            //construct the high encoder
+            var highEncoder = {};
+            var huffTrees = ''; //serialized trees
+            for (var b in countsObjs) {
+                var currCounts = countsObjs[b];
+                var total = totals[b];
+
+                //turn each byte into a leaf HuffNode
+                var stack = [];
+                for (var k in currCounts) {
+                    var node = new HuffNode(currCounts[k]/total, k);
+                    stack.push(node);
+                }
+
+                //load up all the HuffNodes in a Huffman tree
+                var root = new HuffNode();
+                if (stack.length > 1) {
+                    root = new HuffNode();
+                    while (stack.length > 2) {
+                        stack.sort(function(a, b) {return a.freq - b.freq;});
+                        var merge = new HuffNode();
+                        merge.setLeft(stack[0]);
+                        merge.setRight(stack[1]);
+                        stack.shift(), stack.shift();
+                        stack.push(merge);
+                    }
+                    root.setLeft(stack[0]);
+                    root.setRight(stack[1]);
+                } else {
+                    stack[0].setBit(0);
+                    root = stack[0];
+                }
+
+                //map each byte to its traversal path
+                var encoder = {};
+                root.traverse(encoder, '');
+
+                //connect the encoder to the high encoder
+                highEncoder[b] = encoder;
+
+                //serialize the trees
+                huffTrees += byteToBinString(parseInt(b)); //the previous byte
+                huffTrees += root.serialize(); //the corresponding tree
+            }
+
+            //assemble the file preamble
+            var preamble = '';
+            //6 bits: the # of bits to describe the # bytes in the file
+            var bitsInFileLen = bitsIn(buffer.length);
+            preamble += byteToBinString(bitsInFileLen).substring(2, 8);
+            //n bits: how many bytes are in the uncompressed file
+            preamble += buffer.length.toString(2);
+            //17 bits: number of bits in the serialized Huffman trees
+            var bitsInHuffTrees = huffTrees.length;
+            preamble += numToBinString(bitsInHuffTrees, 17/8);
+            //n bits: the Huffman trees
+            preamble += huffTrees;
+
+            //form a bin string by applying the encodings to the input file
+            var encodedFile = byteToBinString(buffer[0]); //1st byte is normal
+            for (var ai = 1; ai < buffer.length; ai++) {
+                //highEncoder is an array of encoders
+                encodedFile += highEncoder[buffer[ai-1]][buffer[ai]];
+            }
+
+            //turn those strings of 1s and 0s into a byte array
+            var entireFile = preamble + encodedFile;
+            //the number of bits must be divisible by 8, so append some
+            var numToAppend = (8 - entireFile.length%8)%8;
+            for (var ai = 0; ai < numToAppend; ai++) entireFile += '0';
+            var outputBytes = entireFile.match(/.{1,8}/g).map(function(a) {
+                return parseInt(a, 2);
+            });
+
+            //construct the output buffer
+            var outBuffer = new Buffer(outputBytes);
+
+            //write the file to disk
+            var time = +new Date() - start;
+            fs.writeFile(outName, outBuffer, 'binary', function(err) {
+                if (err) return cb(err);
+
+                var hash = prHash;
+                if (hash === -1) {
+                    hash = crypto.createHash('md5')
+                                 .update(buffer)
+                                 .digest('hex');
+                }
+                origSize = origSize < 0 ? fileLen : origSize;
+                cb(
+                    false, time+prTime, hash, outputBytes.length, origSize
+                );
+            });
+        });
+    });
+}
+
+function decompressTxtSpk(inName, outName, prTime, cb) {
     fs.readFile(inName, 'utf-8', function(err, data) {
         if (err) return console.log(err);
 
@@ -404,17 +545,17 @@ function decompressTxtSpk(inName, outName, prTime, callback) {
         //write the file to disk
         var time = +new Date() - start;
         fs.writeFile(outName, ret, function (err) {
-            if (err) return callback(err);
+            if (err) return cb(err);
 
             var hash = crypto.createHash('md5')
                              .update(ret)
                              .digest('hex');
-            callback(false, time+prTime, hash);
+            cb(false, time+prTime, hash);
         });
     });
 }
 
-function decompressHuff(inName, outName, prTime, callback) {
+function decompressHuff(inName, outName, prTime, cb) {
     fs.open(inName, 'r', function(err, fd) {
         if (err) return console.log(err);
 
@@ -466,18 +607,18 @@ function decompressHuff(inName, outName, prTime, callback) {
             //write the file to disk
             var time = +new Date() - start;
             fs.writeFile(outName, outBuffer, 'binary', function(err) {
-                if (err) return callback(err);
+                if (err) return cb(err);
 
                 var hash = crypto.createHash('md5')
                                  .update(outBuffer)
                                  .digest('hex');
-                callback(false, time+prTime, hash);
+                cb(false, time+prTime, hash);
             });
         });
     });
 }
 
-function decompressLZW(inName, outName, prTime, callback) {
+function decompressLZW(inName, outName, prTime, cb) {
     fs.open(inName, 'r', function(err, fd) {
         if (err) return console.log(err);
 
@@ -552,12 +693,12 @@ function decompressLZW(inName, outName, prTime, callback) {
             //write the file to disk
             var time = +new Date() - start;
             fs.writeFile(outName, outBuffer, 'binary', function(err) {
-                if (err) return callback(err);
+                if (err) return cb(err);
 
                 var hash = crypto.createHash('md5')
                                  .update(outBuffer)
                                  .digest('hex');
-                callback(false, time+prTime, hash);
+                cb(false, time+prTime, hash);
             });
         });
     });
